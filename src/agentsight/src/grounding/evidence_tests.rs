@@ -1070,3 +1070,126 @@ fn unknown_ratio_only_covers_the_selected_round() {
         "an unknown call from an earlier round must not trigger abstention"
     );
 }
+
+#[test]
+fn strong_literals_require_complete_observed_values() {
+    for (class, literal, extension) in [
+        (ClaimClass::Version, "1.2.3", "1.2.30"),
+        (ClaimClass::Path, "/tmp/report.txt", "/tmp/report.txt.bak"),
+        (
+            ClaimClass::Url,
+            "https://example.test/api",
+            "https://example.test/apiv2",
+        ),
+    ] {
+        let claim = Claim {
+            text: literal.into(),
+            class,
+            value: None,
+        };
+        for observed in [
+            format!("Found {literal}."),
+            format!(r#"{{"value":"{literal}"}}"#),
+            format!("`{literal}`"),
+            format!("({literal})"),
+            format!(r#"{{"value":"{literal}\n"}}"#),
+        ] {
+            let mut pool = Vec::new();
+            push_entry(&mut pool, 3, Some("source".into()), &observed);
+            assert!(
+                matches!(ground_one(&claim, &pool), Grounding::Grounded {
+                step_id: 3, source_call_id: Some(id) } if id == "source"),
+                "{observed}"
+            );
+        }
+        for observed in [
+            extension.to_string(),
+            format!(r#"{{"value":"{extension}"}}"#),
+        ] {
+            let mut pool = Vec::new();
+            push_entry(&mut pool, 3, Some("source".into()), &observed);
+            assert!(
+                matches!(ground_one(&claim, &pool), Grounding::Unresolved),
+                "{observed}"
+            );
+        }
+    }
+    let mut pool = Vec::new();
+    push_entry(&mut pool, 3, None, "version=v1.2.3");
+    assert!(matches!(
+        ground_one(
+            &Claim {
+                text: "1.2.3".into(),
+                class: ClaimClass::Version,
+                value: None
+            },
+            &pool
+        ),
+        Grounding::Grounded { .. }
+    ));
+    for (class, literal, observed) in [
+        (ClaimClass::Version, "1.2.3", "11.2.3"),
+        (ClaimClass::Version, "1.2.3", "1.2.3-rc1"),
+        (ClaimClass::Path, "/tmp/report.txt", "/other/tmp/report.txt"),
+        (
+            ClaimClass::Path,
+            "/tmp/report.txt",
+            "/tmp/report.txt,backup",
+        ),
+        (
+            ClaimClass::Url,
+            "https://example.test/api",
+            "https://example.test/api?limit=120",
+        ),
+        (
+            ClaimClass::Url,
+            "https://example.test/api",
+            "https://example.test/api,backup",
+        ),
+    ] {
+        let mut pool = Vec::new();
+        push_entry(&mut pool, 3, None, observed);
+        assert!(
+            matches!(
+                ground_one(
+                    &Claim {
+                        text: literal.into(),
+                        class,
+                        value: None
+                    },
+                    &pool
+                ),
+                Grounding::Unresolved
+            ),
+            "{observed}"
+        );
+    }
+}
+
+#[test]
+fn weak_containment_and_numeric_rounding_remain_supported() {
+    let mut pool = Vec::new();
+    push_entry(&mut pool, 1, None, "qualified_name_suffix: 242391");
+    assert!(matches!(
+        ground_one(
+            &Claim {
+                text: "qualified_name".into(),
+                class: ClaimClass::Identifier,
+                value: None
+            },
+            &pool
+        ),
+        Grounding::Grounded { .. }
+    ));
+    assert!(matches!(
+        ground_one(
+            &Claim {
+                text: "240k".into(),
+                class: ClaimClass::Number,
+                value: Some(240000.0)
+            },
+            &pool
+        ),
+        Grounding::Grounded { .. }
+    ));
+}
